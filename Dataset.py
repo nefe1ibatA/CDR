@@ -7,7 +7,7 @@ class Dataset:
 		self.path = path
 		self.data = self.getData()
 		self.size = size
-		if path == 'ui_graph':
+		if 'ui_graph' in self.path:
 			self.shape = (size[0], size[1])
 			self.train, self.test = self.getTrainTest()
 			self.trainDict = self.getTrainDict()
@@ -26,16 +26,16 @@ class Dataset:
 		self.weights = [i[2] for i in self.data]
 		indice = np.array(self.pairs, dtype=np.int32)
 		values = np.array(self.weights, dtype=np.float32)
-		if self.path == 'ui_graph':
+		if 'ui_graph' in self.path:
 			graph = sp.coo_matrix(
             	(values, (indice[:, 0], indice[:, 1])), shape=(self.size[0], self.size[1])).tocsr()
-		elif self.path == 'uw_graph':
+		elif 'uw_graph' in self.path:
 			graph = sp.coo_matrix(
             	(values, (indice[:, 0], indice[:, 1])), shape=(self.size[0], self.size[2])).tocsr()
-		elif self.path == 'iw_graph':
+		elif 'iw_graph' in self.path:
 			graph = sp.coo_matrix(
             	(values, (indice[:, 0], indice[:, 1])), shape=(self.size[1], self.size[2])).tocsr()
-		elif self.path == 'ww_graph':
+		elif 'ww_graph' in self.path:
 			graph = sp.coo_matrix(
             	(values, (indice[:, 0], indice[:, 1])), shape=(self.size[2], self.size[2])).tocsr()
 		else:

@@ -1,6 +1,7 @@
 from preprocess.datareader import Datareader
 from preprocess.RatingGraph import RatingGraphBuilder
 from preprocess.ReviewGraph import ReviewGraphBuilder
+import os
 
 def g2f(graph, name):
     filePath = './data/clean/' + name + '.txt'
@@ -10,41 +11,45 @@ def g2f(graph, name):
         f.write(s)
     f.close()
 
-def main(dataName_A, dataName_B):
-    dr = Datareader(dataName_A, dataName_B)
-    A_user_rating_dict, A_user_review_dict, A_item_user_dict, \
-        B_user_rating_dict, B_user_review_dict, B_item_user_dict \
-            = dr.read_data()
-
+def graphGen(user_rating_dict, user_review_dict, item_user_dict, domain):
     ui_graph = []
     uw_graph = []
     iw_graph = []
     ww_graph = []
-    dataset_A = RatingGraphBuilder(
-            A_user_rating_dict, A_user_review_dict, A_item_user_dict)
-    ReviewGraph_A = ReviewGraphBuilder(A_user_review_dict, A_item_user_dict)
-    ReviewGraph_A = ReviewGraph_A.adj()
-    num_users = dataset_A.shape[0]
-    num_docs = dataset_A.shape[0] + dataset_A.shape[1]
-    num_words = ReviewGraph_A.number_of_nodes() - num_docs
-    f = open('./data/clean/dataset_size.txt', 'w+')
+    dataset = RatingGraphBuilder(
+            user_rating_dict, user_review_dict, item_user_dict)
+    ReviewGraph = ReviewGraphBuilder(user_review_dict, item_user_dict)
+    ReviewGraph = ReviewGraph.adj()
+    num_users = dataset.shape[0]
+    num_docs = dataset.shape[0] + dataset.shape[1]
+    num_words = ReviewGraph.number_of_nodes() - num_docs
+    f = open(os.path.join('./data/clean/dataset_size_' + domain + '.txt'), 'w+')
     s = str(num_users) + '\t' + str(num_docs - num_users) + '\t' + str(num_words) + '\n'
     f.write(s)
     f.close()
-    for (u, v, wt) in ReviewGraph_A.edges.data('weight'):
+    for (u, v, wt) in ReviewGraph.edges.data('weight'):
         if u < num_users:
             uw_graph.append((u, v - num_docs, wt))
         elif u >= num_users and u < num_docs:
             iw_graph.append((u - num_users, v - num_docs, wt))
         else:
             ww_graph.append((u - num_docs, v - num_docs, wt))
-    RatingGraph_A, _ = dataset_A.getData(A_user_rating_dict, A_user_review_dict, A_item_user_dict)
-    for (u, v, wt) in RatingGraph_A:
+    RatingGraph, _ = dataset.getData(user_rating_dict, user_review_dict, item_user_dict)
+    for (u, v, wt) in RatingGraph:
         ui_graph.append((u, v - num_users, wt))
-    g2f(ui_graph, 'ui_graph')
-    g2f(uw_graph, 'uw_graph')
-    g2f(iw_graph, 'iw_graph')
-    g2f(ww_graph, 'ww_graph')
+    g2f(ui_graph, 'ui_graph_' + domain)
+    g2f(uw_graph, 'uw_graph_' + domain)
+    g2f(iw_graph, 'iw_graph_' + domain)
+    g2f(ww_graph, 'ww_graph_' + domain)
+
+def main(dataName_A, dataName_B):
+    dr = Datareader(dataName_A, dataName_B)
+    A_user_rating_dict, A_user_review_dict, A_item_user_dict, \
+        B_user_rating_dict, B_user_review_dict, B_item_user_dict \
+            = dr.read_data()
+
+    graphGen(A_user_rating_dict, A_user_review_dict, A_item_user_dict, 'A')
+    graphGen(B_user_rating_dict, B_user_review_dict, B_item_user_dict, 'B')
 
 
 

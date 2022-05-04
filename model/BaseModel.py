@@ -6,20 +6,34 @@ class BaseModel(nn.Module):
     def __init__(self, embedding_size, data_size, create_embeddings=True):
         super().__init__()
         self.embedding_size = embedding_size
-        self.num_users = data_size[0]
-        self.num_items = data_size[1]
-        self.num_words = data_size[2]
+        data_size_A, data_size_B = data_size
+        self.num_users_A = data_size_A[0]
+        self.num_items_A = data_size_A[1]
+        self.num_words_A = data_size_A[2]
+        self.num_users_B = data_size_B[0]
+        self.num_items_B = data_size_B[1]
+        self.num_words_B = data_size_B[2]
         if create_embeddings:
-            # initialize features
-            self.users_feature = nn.Parameter(
-                torch.FloatTensor(self.num_users, self.embedding_size))
-            nn.init.xavier_normal_(self.users_feature)
-            self.items_feature = nn.Parameter(
-                torch.FloatTensor(self.num_items, self.embedding_size))
-            nn.init.xavier_normal_(self.items_feature)
-            self.words_feature = nn.Parameter(
-                torch.FloatTensor(self.num_words, self.embedding_size))
-            nn.init.xavier_normal_(self.words_feature)
+            # initialize features_A
+            self.users_feature_A = nn.Parameter(
+                torch.FloatTensor(self.num_users_A, self.embedding_size))
+            nn.init.xavier_normal_(self.users_feature_A)
+            self.items_feature_A = nn.Parameter(
+                torch.FloatTensor(self.num_items_A, self.embedding_size))
+            nn.init.xavier_normal_(self.items_feature_A)
+            self.words_feature_A = nn.Parameter(
+                torch.FloatTensor(self.num_words_A, self.embedding_size))
+            nn.init.xavier_normal_(self.words_feature_A)
+            # initialize features_B
+            self.users_feature_B = nn.Parameter(
+                torch.FloatTensor(self.num_users_B, self.embedding_size))
+            nn.init.xavier_normal_(self.users_feature_B)
+            self.items_feature_B = nn.Parameter(
+                torch.FloatTensor(self.num_items_B, self.embedding_size))
+            nn.init.xavier_normal_(self.items_feature_B)
+            self.words_feature_B = nn.Parameter(
+                torch.FloatTensor(self.num_words_B, self.embedding_size))
+            nn.init.xavier_normal_(self.words_feature_B)
 
     def propagate(self, *args, **kwargs):
         '''

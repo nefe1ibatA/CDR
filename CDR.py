@@ -15,7 +15,8 @@ from sklearn.manifold import TSNE
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
 from utils import preprocess_adj
-allResults = []
+allResults_A = []
+allResults_B = []
 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -86,23 +87,83 @@ class trainer:
         self.emb_dim = args.emb_dim
         self.topK = args.topK
 
-        with open('./data/clean/dataset_size.txt', 'r') as f:
-            self.size = [int(s) for s in f.readline().split('\t')][:3]
+        with open('./data/clean/dataset_size_A.txt', 'r') as f:
+            self.size_A = [int(s) for s in f.readline().split('\t')][:3]
+        with open('./data/clean/dataset_size_B.txt', 'r') as f:
+            self.size_B = [int(s) for s in f.readline().split('\t')][:3]
 
-        self.dataset = Dataset('ui_graph', self.size)
-        self.train, self.test = self.dataset.train, self.dataset.test
-        self.testNeg = self.dataset.getTestNeg(self.test, 99)
+        # A
+        self.dataset_A = Dataset('ui_graph_A', self.size_A)
+        self.train_A, self.test_A = self.dataset_A.train, self.dataset_A.test
+        self.testNeg_A = self.dataset_A.getTestNeg(self.test_A, 99)
 
-        self.uw_dataset = Dataset('uw_graph', self.size)
-        self.iw_dataset = Dataset('iw_graph', self.size)
-        self.ww_dataset = Dataset('ww_graph', self.size)
+        self.uw_dataset_A = Dataset('uw_graph_A', self.size_A)
+        self.iw_dataset_A = Dataset('iw_graph_A', self.size_A)
+        self.ww_dataset_A = Dataset('ww_graph_A', self.size_A)
 
-        ui_graph = self.dataset.getgraph()
-        uw_graph = self.uw_dataset.getgraph()
-        iw_graph = self.iw_dataset.getgraph()
-        ww_graph = self.ww_dataset.getgraph()
-        self.raw_graph = [ui_graph, uw_graph, iw_graph, ww_graph]
+        ui_graph_A = self.dataset_A.getgraph()
+        uw_graph_A = self.uw_dataset_A.getgraph()
+        iw_graph_A = self.iw_dataset_A.getgraph()
+        ww_graph_A = self.ww_dataset_A.getgraph()
+        self.raw_graph_A = [ui_graph_A, uw_graph_A, iw_graph_A, ww_graph_A]
 
+        # B
+        self.dataset_B = Dataset('ui_graph_B', self.size_B)
+        self.train_B, self.test_B = self.dataset_B.train, self.dataset_B.test
+        self.testNeg_B = self.dataset_B.getTestNeg(self.test_B, 99)
+
+        self.uw_dataset_B = Dataset('uw_graph_B', self.size_B)
+        self.iw_dataset_B = Dataset('iw_graph_B', self.size_B)
+        self.ww_dataset_B = Dataset('ww_graph_B', self.size_B)
+
+        ui_graph_B = self.dataset_B.getgraph()
+        uw_graph_B = self.uw_dataset_B.getgraph()
+        iw_graph_B = self.iw_dataset_B.getgraph()
+        ww_graph_B = self.ww_dataset_B.getgraph()
+        self.raw_graph_B = [ui_graph_B, uw_graph_B, iw_graph_B, ww_graph_B]
+
+        self.size = [self.size_A, self.size_B]
+        self.raw_graph = [self.raw_graph_A, self.raw_graph_B]
+
+
+    def evaluate(self, model, testUser, testItem, domain, topK):
+        HR = []
+        NDCG = []
+
+        print('testUser : ', len(testUser))
+        for i in tqdm(range(len(testUser))):
+            target = testItem[i][0]
+            pred, _ = model(testUser[i], testItem[i], domain)
+
+            item_score_dict = {}
+
+            for j in range(len(testItem[i])):
+                item = testItem[i][j]
+                item_score_dict[item] = pred[j]
+
+            ranklist = heapq.nlargest(topK,
+                                      item_score_dict,
+                                      key=item_score_dict.get)
+
+            tmp_HR = 0
+            for item in ranklist:
+                if item == target:
+                    tmp_HR = 1
+
+            HR.append(tmp_HR)
+
+            tmp_NDCG = 0
+            for i in range(len(ranklist)):
+                item = ranklist[i]
+                if item == target:
+                    tmp_NDCG = math.log(2) / math.log(i + 2)
+
+            NDCG.append(tmp_NDCG)
+
+        HR = np.mean(HR)
+        NDCG = np.mean(NDCG)
+
+        return HR, NDCG
 
     def run(self):
         model = Model(self.emb_dim, self.size, self.raw_graph, 2, device)
@@ -111,176 +172,142 @@ class trainer:
         print('training on device:', device)
         optimizer = optim.Adam(model.parameters(), lr=self.lr)
 
-        best_HR = -1
-        best_NDCG = -1
-        best_epoch = -1
+        best_HR_A = -1
+        best_NDCG_A = -1
+        best_epoch_A = -1
+
+        best_HR_B = -1
+        best_NDCG_B = -1
+        best_epoch_B = -1 
 
         model.train()
         topK = self.topK
         for epoch in range(self.maxEpochs):
             print("=" * 20 + "Epoch ", epoch + 1, "=" * 20)
-            train_u, train_i, train_r = self.dataset.getInstances(
-                self.train, self.negNum)
-            train_len = len(train_u)
-            shuffle_idx = np.random.permutation(np.arange(train_len))
-            train_u = train_u[shuffle_idx]
-            train_i = train_i[shuffle_idx]
-            train_r = train_r[shuffle_idx]
 
-            num_batches = train_len // self.batchSize + 1
-
-            loss = torch.zeros(0).to(device)
+            # A
+            train_u_A, train_i_A, train_r_A = self.dataset_A.getInstances(
+                self.train_A, self.negNum)
+            train_len_A = len(train_u_A)
+            shuffle_idx = np.random.permutation(np.arange(train_len_A))
+            train_u_A = train_u_A[shuffle_idx]
+            train_i_A = train_i_A[shuffle_idx]
+            train_r_A = train_r_A[shuffle_idx]
+            num_batches = train_len_A // self.batchSize + 1
+            loss_A = torch.zeros(0).to(device)
             for i in range(num_batches):
                 min_idx = i * self.batchSize
-                max_idx = np.min([train_len, (i + 1) * self.batchSize])
+                max_idx = np.min([train_len_A, (i + 1) * self.batchSize])
 
-                if min_idx < train_len:
-                    train_u_batch = torch.tensor(train_u[min_idx:max_idx]).to(device)
-                    train_i_batch = torch.tensor(train_i[min_idx:max_idx]).to(device)
-                    train_r_batch = torch.tensor(train_r[min_idx:max_idx]).to(device)
+                if min_idx < train_len_A:
+                    train_u_A_batch = torch.tensor(train_u_A[min_idx:max_idx]).to(device)
+                    train_i_A_batch = torch.tensor(train_i_A[min_idx:max_idx]).to(device)
+                    train_r_A_batch = torch.tensor(train_r_A[min_idx:max_idx]).to(device)
 
-                    pred, regularizer = model(train_u_batch, train_i_batch)
+                    pred, regularizer = model(train_u_A_batch, train_i_A_batch, 'A')
 
-                    regRate = train_r_batch / 5.0
-                    batchloss = torch.sum(-(regRate * torch.log(
+                    regRate = train_r_A_batch / 5.0
+                    batchloss_A = torch.sum(-(regRate * torch.log(
                         pred) + (1 - regRate) * torch.log(
                         1 - pred))) + self.lambdad * regularizer
 
                     optimizer.zero_grad()
-                    batchloss.backward()
+                    batchloss_A.backward()
                     optimizer.step()
-                    loss = torch.cat((loss, torch.tensor([batchloss]).to(device)))
+                    loss_A = torch.cat((loss_A, torch.tensor([batchloss_A]).to(device)))
+            loss_A = torch.mean(loss_A)
+            print("Mean loss A in epoch {} is: {}\n".format(epoch + 1, loss_A))
+            writer.add_scalar('loss/loss_A', loss_A, global_step=epoch)
 
-            loss = torch.mean(loss)
-            print("Mean loss in epoch {} is: {}\n".format(epoch + 1, loss))
-            writer.add_scalar('loss/loss', loss, global_step=epoch)
+            # B
+            train_u_B, train_i_B, train_r_B = self.dataset_B.getInstances(
+                self.train_B, self.negNum)
+            train_len_B = len(train_u_B)
+            shuffle_idx = np.random.permutation(np.arange(train_len_B))
+            train_u_B = train_u_B[shuffle_idx]
+            train_i_B = train_i_B[shuffle_idx]
+            train_r_B = train_r_B[shuffle_idx]
+            num_batches = train_len_B // self.batchSize + 1
+            loss_B = torch.zeros(0).to(device)
+            for i in range(num_batches):
+                min_idx = i * self.batchSize
+                max_idx = np.min([train_len_B, (i + 1) * self.batchSize])
+
+                if min_idx < train_len_B:
+                    train_u_B_batch = torch.tensor(train_u_B[min_idx:max_idx]).to(device)
+                    train_i_B_batch = torch.tensor(train_i_B[min_idx:max_idx]).to(device)
+                    train_r_B_batch = torch.tensor(train_r_B[min_idx:max_idx]).to(device)
+
+                    pred, regularizer = model(train_u_B_batch, train_i_B_batch, 'B')
+
+                    regRate = train_r_B_batch / 5.0
+                    batchloss_B = torch.sum(-(regRate * torch.log(
+                        pred) + (1 - regRate) * torch.log(
+                        1 - pred))) + self.lambdad * regularizer
+
+                    optimizer.zero_grad()
+                    batchloss_B.backward()
+                    optimizer.step()
+                    loss_B = torch.cat((loss_B, torch.tensor([batchloss_B]).to(device)))
+            loss_B = torch.mean(loss_B)
+            print("Mean loss A in epoch {} is: {}\n".format(epoch + 1, loss_B))
+            writer.add_scalar('loss/loss_B', loss_B, global_step=epoch)
 
             model.eval()
 
-            HR = []
-            NDCG = []
-            testUser = self.testNeg[0]
-            testItem = self.testNeg[1]
-            print('testUser : ', len(testUser))
-            for i in tqdm(range(len(testUser))):
-                target = testItem[i][0]
-                pred, _ = model(testUser[i], testItem[i])
+            testUser = self.testNeg_A[0]
+            testItem = self.testNeg_A[1]
+            HR_A, NDCG_A = self.evaluate(model, testUser, testItem, 'A', topK)
+            writer.add_scalar('others/HR_A', HR_A, global_step=epoch)
+            writer.add_scalar('others/NDCG_A', NDCG_A, global_step=epoch)
 
-                item_score_dict = {}
-
-                for j in range(len(testItem[i])):
-                    item = testItem[i][j]
-                    item_score_dict[item] = pred[j]
-
-                ranklist = heapq.nlargest(topK,
-                                          item_score_dict,
-                                          key=item_score_dict.get)
-
-                tmp_HR = 0
-                for item in ranklist:
-                    if item == target:
-                        tmp_HR = 1
-
-                HR.append(tmp_HR)
-
-                tmp_NDCG = 0
-                for i in range(len(ranklist)):
-                    item = ranklist[i]
-                    if item == target:
-                        tmp_NDCG = math.log(2) / math.log(i + 2)
-
-                NDCG.append(tmp_NDCG)
-
-            HR = np.mean(HR)
-            NDCG = np.mean(NDCG)
-
-            writer.add_scalar('others/HR', HR, global_step=epoch)
-            writer.add_scalar('others/NDCG', NDCG, global_step=epoch)
-
-            allResults.append([epoch + 1, topK, HR, NDCG, loss.detach().cpu().numpy()])
+            allResults_A.append([epoch + 1, topK, HR_A, NDCG_A, loss_A.detach().cpu().numpy()])
             print(
                 "Domain A Epoch: ", epoch + 1,
                 "TopK: {} HR: {}, NDCG: {}".format(
-                    topK, HR, NDCG))
+                    topK, HR_A, NDCG_A))
+            if HR_A > best_HR_A:
+                best_HR_A = HR_A
+                best_epoch_A = epoch + 1
+            if NDCG_A > best_NDCG_A:
+                best_NDCG_A = NDCG_A
 
+            testUser = self.testNeg_B[0]
+            testItem = self.testNeg_B[1]
+            HR_B, NDCG_B = self.evaluate(model, testUser, testItem, 'B', topK)
+            writer.add_scalar('others/HR_B', HR_B, global_step=epoch)
+            writer.add_scalar('others/NDCG_B', NDCG_B, global_step=epoch)
 
-            if HR > best_HR:
-                best_HR = HR
-                best_epoch = epoch + 1
-            if NDCG > best_NDCG:
-                best_NDCG = NDCG
-                best_epoch = epoch + 1
-
-
+            allResults_B.append([epoch + 1, topK, HR_B, NDCG_B, loss_B.detach().cpu().numpy()])
+            print(
+                "Domain B Epoch: ", epoch + 1,
+                "TopK: {} HR: {}, NDCG: {}".format(
+                    topK, HR_B, NDCG_B))
+            if HR_B > best_HR_B:
+                best_HR_B = HR_B
+                best_epoch_B = epoch + 1
+            if NDCG_B > best_NDCG_B:
+                best_NDCG_B = NDCG_B
         print(
-            "Domain A: Best HR: {}, NDCG: {} At Epoch {}".format(best_HR, best_NDCG, best_epoch))
+            "Domain A: Best HR: {}, NDCG: {} At Epoch {}".format(best_HR_A, best_NDCG_A, best_epoch_A))
+        print(
+            "Domain B: Best HR: {}, NDCG: {} At Epoch {}".format(best_HR_B, best_NDCG_B, best_epoch_B))
 
-        bestPerformance = [[best_HR, best_NDCG, best_epoch]]
+        bestPerformance = [[best_HR_A, best_NDCG_A, best_epoch_A],
+                           [best_HR_A, best_NDCG_A, best_epoch_A]]
 
-        model.eval()
-        with torch.no_grad():
-            userVecs = [model(u, testItem[0], 'A')[0] for u in testUser]
-            itemVecs = [model(testUser[0], i, 'A')[1] for i in testItem]
-            userVecs = [i.detach().cpu().numpy().reshape(-1) for i in userVecs]
-            itemVecs = [i.detach().cpu().numpy().reshape(-1) for i in itemVecs]
-
-            tsne = TSNE(n_components=2, init='pca', random_state=0)
-            user2D = tsne.fit_transform(userVecs)
-            item2D = tsne.fit_transform(itemVecs)
-
-            fig0 = plt.figure()
-            t1 = plt.scatter(user2D[:, 0], user2D[:, 1], marker='x', c='r', s=20)  # marker:点符号 c:点颜色 s:点大小
-            t2 = plt.scatter(item2D[:, 0], item2D[:, 1], marker='o', c='b', s=20)
-            plt.xlabel('X')
-            plt.ylabel('Y')
-            plt.legend((t1, t2), ('user', 'item'))
-            plt.show()
-
-        matname = 'baseline_result.mat'
-        scio.savemat(matname, {
-            'allResults': allResults,
+        matname = 'result.mat'
+        scio.savemat(
+            matname, {
+            'allResults_A': allResults_A,
+            'allResults_B': allResults_B,
             'bestPerformance': bestPerformance
-        })
+            }
+        )
+        print("Training complete!")
 
 
 if __name__ == '__main__':
     main('Appliances', 'Movies_and_TV')
     # main('Movies_and_TV', 'Appliances')
     # main('Arts_Crafts_and_Sewing_5', 'Luxury_Beauty_5')
-    allResults = np.array(allResults)
-    x_label = allResults[:, 0]
-    y_topK = allResults[:, 1]
-    y_HR = allResults[:, 2]
-    y_NDCG = allResults[:, 3]
-    y_loss = allResults[:, 4]
-
-    fig1 = plt.figure()
-    f1 = fig1.add_subplot(1, 1, 1)
-    f1.set_title('Loss')
-    f1.set_xlabel('Epoch')
-    f1.set_ylabel('Loss')
-    f1.grid()
-    f1.plot(x_label, y_loss)
-    fig1.savefig('Loss.jpg')
-
-    fig2 = plt.figure()
-    f2 = fig2.add_subplot(1, 1, 1)
-    f2.set_title('HR')
-    f2.set_xlabel('Epoch')
-    f2.set_ylabel('HR')
-    f2.grid()
-    f2.plot(x_label, y_HR)
-    fig2.savefig('HR.jpg')
-
-    fig3 = plt.figure()
-    f3 = fig3.add_subplot(1, 1, 1)
-    f2.set_title('NDCG')
-    f3.set_xlabel('Epoch')
-    f3.set_ylabel('NDCG')
-    f3.grid()
-    f3.plot(x_label, y_NDCG)
-    fig3.savefig('NDCG.jpg')
-
-    plt.show()
-
-# plt.plot()
