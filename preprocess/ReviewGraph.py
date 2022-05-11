@@ -102,6 +102,9 @@ class ReviewGraphBuilder:
     def adj(self):
         return self.gA
 
+    def getWordsidx(self):
+        return self.word2id_A
+
     def getWords(self, sentence):
         cutwords1 = word_tokenize(sentence)
         cutwords2 = [word for word in cutwords1 if word not in self.interpunctuations]  # 去除标点符号
@@ -138,7 +141,6 @@ class ReviewGraphBuilder:
             review_A.append(str)
 
         print("A done...")
-
         return review_A
 
     def get_pmi_edge(self):

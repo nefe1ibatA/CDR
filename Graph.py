@@ -2,6 +2,7 @@ from preprocess.datareader import Datareader
 from preprocess.RatingGraph import RatingGraphBuilder
 from preprocess.ReviewGraph import ReviewGraphBuilder
 import os
+from typing import List
 
 def g2f(graph, name):
     filePath = './data/clean/' + name + '.txt'
@@ -50,8 +51,32 @@ def main(dataName_A, dataName_B):
 
     graphGen(A_user_rating_dict, A_user_review_dict, A_item_user_dict, 'A')
     graphGen(B_user_rating_dict, B_user_review_dict, B_item_user_dict, 'B')
+    calCommon(A_user_review_dict, A_item_user_dict, B_user_review_dict, B_item_user_dict)
+
+
+class CommonWords:
+    def __init__(self, w: str, A: int, B: int) -> None:
+        self.word: str = w
+        self.Aidx: int = A
+        self.Bidx: int = B
+
+def calCommon(A_user_review_dict, A_item_user_dict, B_user_review_dict, B_item_user_dict):
+
+    A_ReviewGraph = ReviewGraphBuilder(A_user_review_dict, A_item_user_dict)
+    A_w2i: dict = A_ReviewGraph.getWordsidx()
+
+    B_ReviewGraph = ReviewGraphBuilder(B_user_review_dict, B_item_user_dict)
+    B_w2i: dict = B_ReviewGraph.getWordsidx()
+    commonList: List[CommonWords] = []
+    for A_w, A_i in A_w2i.items():
+        if A_w in B_w2i:
+            commonList.append(CommonWords(A_w, A_i, B_w2i[A_w]))
+    with open('./data/clean/common_words.txt', 'w+') as t:
+        t.write()
+    return commonList
 
 
 
 if __name__ == '__main__':
     main('Appliances', 'Movies_and_TV')
+    t = calCommon('Appliances', 'Movies_and_TV')

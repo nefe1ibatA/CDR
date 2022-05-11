@@ -15,6 +15,8 @@ from sklearn.manifold import TSNE
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
 from utils import preprocess_adj
+from warnings import simplefilter
+simplefilter(action='ignore', category=FutureWarning)
 allResults_A = []
 allResults_B = []
 
@@ -35,27 +37,23 @@ def main(dataName_A, dataName_B):
     parser.add_argument('-maxEpochs',
                         action='store',
                         dest='maxEpochs',
-                        default=100)
+                        default=30)
     parser.add_argument('-lr',
                         action='store',
                         dest='lr',
-                        default=0.001)
-    parser.add_argument('-lr_G',
-                        action='store',
-                        dest='lr_G',
-                        default=0.001)
-    parser.add_argument('-lr_D',
-                        action='store',
-                        dest='lr_D',
-                        default=0.0000)                    
+                        default=0.0005)                   
     parser.add_argument('-lambdad',
                         action='store',
                         dest='lambdad',
                         default=0.001)
+    parser.add_argument('-lambdad2',
+                        action='store',
+                        dest='lambdad2',
+                        default=0.001)
     parser.add_argument('-batchSize',
                         action='store',
                         dest='batchSize',
-                        default=4096)
+                        default=256)
     parser.add_argument('-negNum',
                         action='store',
                         dest='negNum',
@@ -83,6 +81,7 @@ class trainer:
         self.lr = args.lr
         self.batchSize = args.batchSize
         self.lambdad = args.lambdad
+        self.lambdad2 = args.lambdad2
         self.negNum = args.negNum
         self.emb_dim = args.emb_dim
         self.topK = args.topK
@@ -133,7 +132,7 @@ class trainer:
         print('testUser : ', len(testUser))
         for i in tqdm(range(len(testUser))):
             target = testItem[i][0]
-            pred, _ = model(testUser[i], testItem[i], domain)
+            pred, _, _ = model(testUser[i], testItem[i], domain)
 
             item_score_dict = {}
 
@@ -166,7 +165,7 @@ class trainer:
         return HR, NDCG
 
     def run(self):
-        model = Model(self.emb_dim, self.size, self.raw_graph, 2, device)
+        model = Model(self.emb_dim, self.size, self.link, self.raw_graph, 2, device)
         model = model.to(device)
         writer = SummaryWriter('runs/latest')
         print('training on device:', device)
@@ -204,12 +203,12 @@ class trainer:
                     train_i_A_batch = torch.tensor(train_i_A[min_idx:max_idx]).to(device)
                     train_r_A_batch = torch.tensor(train_r_A[min_idx:max_idx]).to(device)
 
-                    pred, regularizer = model(train_u_A_batch, train_i_A_batch, 'A')
+                    pred, regularizer, dis = model(train_u_A_batch, train_i_A_batch, 'A')
 
                     regRate = train_r_A_batch / 5.0
                     batchloss_A = torch.sum(-(regRate * torch.log(
                         pred) + (1 - regRate) * torch.log(
-                        1 - pred))) + self.lambdad * regularizer
+                        1 - pred))) + self.lambdad * regularizer + self.lambdad2 * dis
 
                     optimizer.zero_grad()
                     batchloss_A.backward()
@@ -238,12 +237,12 @@ class trainer:
                     train_i_B_batch = torch.tensor(train_i_B[min_idx:max_idx]).to(device)
                     train_r_B_batch = torch.tensor(train_r_B[min_idx:max_idx]).to(device)
 
-                    pred, regularizer = model(train_u_B_batch, train_i_B_batch, 'B')
+                    pred, regularizer, dis = model(train_u_B_batch, train_i_B_batch, 'B')
 
                     regRate = train_r_B_batch / 5.0
                     batchloss_B = torch.sum(-(regRate * torch.log(
                         pred) + (1 - regRate) * torch.log(
-                        1 - pred))) + self.lambdad * regularizer
+                        1 - pred))) + self.lambdad * regularizer + self.lambdad2 * dis
 
                     optimizer.zero_grad()
                     batchloss_B.backward()
@@ -255,8 +254,8 @@ class trainer:
 
             model.eval()
 
-            testUser = self.testNeg_A[0]
-            testItem = self.testNeg_A[1]
+            testUser = torch.tensor(self.testNeg_A[0]).to(device)
+            testItem = torch.tensor(self.testNeg_A[1]).to(device)
             HR_A, NDCG_A = self.evaluate(model, testUser, testItem, 'A', topK)
             writer.add_scalar('others/HR_A', HR_A, global_step=epoch)
             writer.add_scalar('others/NDCG_A', NDCG_A, global_step=epoch)
@@ -272,8 +271,8 @@ class trainer:
             if NDCG_A > best_NDCG_A:
                 best_NDCG_A = NDCG_A
 
-            testUser = self.testNeg_B[0]
-            testItem = self.testNeg_B[1]
+            testUser = torch.tensor(self.testNeg_B[0]).to(device)
+            testItem = torch.tensor(self.testNeg_B[1]).to(device)
             HR_B, NDCG_B = self.evaluate(model, testUser, testItem, 'B', topK)
             writer.add_scalar('others/HR_B', HR_B, global_step=epoch)
             writer.add_scalar('others/NDCG_B', NDCG_B, global_step=epoch)
@@ -288,6 +287,22 @@ class trainer:
                 best_epoch_B = epoch + 1
             if NDCG_B > best_NDCG_B:
                 best_NDCG_B = NDCG_B
+
+            with torch.no_grad():
+                userA, _, userB, _ = model.propagate()
+                userB = torch.mm(userB, torch.linalg.inv(model.map_A))
+                userA = [i.detach().cpu().numpy().reshape(-1) for i in userA]
+                userB = [i.detach().cpu().numpy().reshape(-1) for i in userB]
+
+                tsne = TSNE(n_components=2, init='pca', random_state=0)
+                userA = tsne.fit_transform(userA)
+                userB = tsne.fit_transform(userB)
+
+                fig0 = plt.figure()
+                t1 = plt.scatter(userA[:, 0], userA[:, 1], marker='o', c='r', s=10)  # marker:点符号 c:点颜色 s:点大小
+                t2 = plt.scatter(userB[:, 0], userB[:, 1], marker='o', c='b', s=10)
+                # plt.legend((t1, t2), ('userA', 'userB'))
+                plt.savefig('tsne/epoch {}'.format(epoch+1))
         print(
             "Domain A: Best HR: {}, NDCG: {} At Epoch {}".format(best_HR_A, best_NDCG_A, best_epoch_A))
         print(

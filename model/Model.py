@@ -1,12 +1,9 @@
-from multiprocessing.sharedctypes import Value
-from nis import match
 import torch
 import torch.nn as nn
 import scipy.sparse as sp
 import numpy as np
 from model.BaseModel import BaseModel
 from torch.nn import functional as F
-from utils import get_features
 
 
 def graph_generating(raw_graph, row, col):
@@ -34,9 +31,10 @@ def to_tensor(graph):
 
 
 class Model(BaseModel):
-    def __init__(self, embedding_size, data_size, raw_graph, num_layers, device, pretrain=None):
+    def __init__(self, embedding_size, data_size, link, raw_graph, num_layers, device, pretrain=None):
         super().__init__(embedding_size, data_size, create_embeddings=True)
 
+        self.link = link
         raw_graph_A, raw_graph_B = raw_graph
         assert isinstance(raw_graph_A, list)
         assert isinstance(raw_graph_B, list)
@@ -72,6 +70,21 @@ class Model(BaseModel):
         )
         self.user_W_Attention_B_B = nn.Parameter(
             torch.randn(self.num_users_B, embedding_size * t),
+            requires_grad=True
+        )
+
+        self.map_A = nn.Parameter(
+            torch.randn(embedding_size * t, embedding_size * t),
+            requires_grad=True
+        )
+
+        self.attn_A_A = nn.Parameter(
+            torch.randn(embedding_size * t),
+            requires_grad=True
+        )
+
+        self.attn_B_B = nn.Parameter(
+            torch.randn(embedding_size * t),
             requires_grad=True
         )
 
@@ -163,11 +176,14 @@ class Model(BaseModel):
         #  ==============================  word level propagation  ==============================
         atom_words_feature_A = self.ww_propagate(
             self.atom_graph_A, self.words_feature_A, self.dnns_atom_A)
-        atom_users_feature_A = F.normalize(torch.matmul(self.u_w_pooling_graph_A, atom_words_feature_A))
-        atom_items_feature_A = F.normalize(torch.matmul(self.i_w_pooling_graph_A, atom_words_feature_A))
-
         atom_words_feature_B = self.ww_propagate(
             self.atom_graph_B, self.words_feature_B, self.dnns_atom_B)
+
+        
+        
+        
+        atom_users_feature_A = F.normalize(torch.matmul(self.u_w_pooling_graph_A, atom_words_feature_A))
+        atom_items_feature_A = F.normalize(torch.matmul(self.i_w_pooling_graph_A, atom_words_feature_A))
         atom_users_feature_B = F.normalize(torch.matmul(self.u_w_pooling_graph_B, atom_words_feature_B))
         atom_items_feature_B = F.normalize(torch.matmul(self.i_w_pooling_graph_B, atom_words_feature_B))
 
@@ -177,6 +193,8 @@ class Model(BaseModel):
 
         non_atom_users_feature_B, non_atom_items_feature_B = self.ui_propagate(
             self.non_atom_graph_B, self.users_feature_B, self.items_feature_B, self.dnns_non_atom_B, 'B')
+        # non_atom_users_feature_B, non_atom_items_feature_B = self.ui_propagate(
+            # self.non_atom_graph_B, self.users_feature_B, self.items_feature_B, self.dnns_non_atom_A, 'B')
 
         # users_feature = [atom_users_feature, non_atom_users_feature]
         # items_feature = [atom_items_feature, non_atom_items_feature]
@@ -205,35 +223,39 @@ class Model(BaseModel):
 
     def forward(self, u, i, domain):
         users_feature_A, items_feature_A, users_feature_B, items_feature_B = self.propagate()
-        s = torch.mm(users_feature_A, users_feature_B.T)
-        # users_feature_A = users_feature_A[u]
-        # items_feature_A = items_feature_A[i]
-        # users_feature_B = users_feature_B[u]
-        # items_feature_B = items_feature_B[i]
         if domain == 'A':
             users = users_feature_A
             aug = users_feature_B
             items = items_feature_A
-            attn = self.user_W_Attention_A_A
+            # attn = self.user_W_Attention_A_A
+            attn = self.attn_A_A
+            mapping = self.map_A
+            ali = torch.linalg.inv(self.map_A)
         elif domain == 'B':
-            s = s.T
             users = users_feature_B
             aug = users_feature_A
             items = items_feature_B
-            attn = self.user_W_Attention_B_B
+            # attn = self.user_W_Attention_B_B
+            attn = self.attn_B_B
+            mapping = torch.linalg.inv(self.map_A)
+            ali = self.map_A
         else:
             raise ValueError(r"non-exist domain")
-        # users = torch.add(
-        #     users * attn,
-        #     aug * (1 - attn)
-        # )
-        users = users[u]
+        u = u.reshape(-1, 1)
+        pro = torch.mm(users, mapping)
+        dis = torch.sqrt(torch.sum(torch.square(pro[u] - aug), axis=2))
+        match = torch.argmin(dis, dim=1)
+        u = u.reshape(-1)
+        users = torch.add(
+            users[u] * attn,
+            # torch.mm(aug[match], ali) * (1 - attn)
+            aug[match] * (1-attn)
+        )
         items = items[i]
-        match = torch.max(s, dim=1).indices
-        aug = aug[match[u]]
-        
+        # users = fcu(users)
+        # items = fci(items)
         pred = self.predict(users, items)
         regularization = self.regularize(users, items)
-        return pred, regularization
+        return pred, regularization, torch.mean(dis)
 
         
