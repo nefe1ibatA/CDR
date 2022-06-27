@@ -4,3 +4,4 @@ data
 baseline_result.mat
 .DS_Store
 runs
+*.png
