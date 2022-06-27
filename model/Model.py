@@ -4,6 +4,7 @@ import scipy.sparse as sp
 import numpy as np
 from model.BaseModel import BaseModel
 from torch.nn import functional as F
+from torch.utils.data.sampler import RandomSampler
 
 
 def graph_generating(raw_graph, row, col):
@@ -35,6 +36,7 @@ class Model(BaseModel):
         super().__init__(embedding_size, data_size, create_embeddings=True)
 
         self.link = link
+        self.device = device
         raw_graph_A, raw_graph_B = raw_graph
         assert isinstance(raw_graph_A, list)
         assert isinstance(raw_graph_B, list)
@@ -63,17 +65,8 @@ class Model(BaseModel):
             self.items_feature_B.data = F.normalize(pretrain['items_feature_B'])
             self.words_feature_B.data = F.normalize(pretrain['words_feature_B'])
 
-        t = (num_layers + 1) * (num_layers + 2)
-        self.user_W_Attention_A_A = nn.Parameter(
-            torch.randn(self.num_users_A, embedding_size * t),
-            requires_grad=True
-        )
-        self.user_W_Attention_B_B = nn.Parameter(
-            torch.randn(self.num_users_B, embedding_size * t),
-            requires_grad=True
-        )
-
-        self.map_A = nn.Parameter(
+        t = int((num_layers + 1) * (num_layers + 2) / 2)
+        self.map = nn.Parameter(
             torch.randn(embedding_size * t, embedding_size * t),
             requires_grad=True
         )
@@ -172,15 +165,41 @@ class Model(BaseModel):
             all_features, (num_users, num_items), 0)
         return users_feature, items_feature
 
+    def transfer(self, feature, aug, domain):
+        if domain == 'A':
+            ind = self.ind_A
+            mapping = self.map
+            attn = self.attn_A_A
+        elif domain == 'B':
+            ind = self.ind_B
+            mapping = torch.linalg.inv(self.map)
+            attn = self.attn_B_B
+        else:
+            raise ValueError(r"non-exist domain")
+        ind = torch.tensor(list(RandomSampler(ind, True, 64))).to(self.device)
+        ind = ind.reshape(-1, 1)
+        pro = torch.mm(feature, mapping)
+        dis = torch.sqrt(torch.sum(torch.square(pro[ind] - aug), axis=2))
+        match = torch.argmin(dis, dim=1)
+        ind = ind.reshape(-1)
+        feature[ind] = torch.add(
+            feature[ind] * attn,
+            aug[match] * (1-attn)
+        )
+        return feature
+
     def propagate(self):
         #  ==============================  word level propagation  ==============================
         atom_words_feature_A = self.ww_propagate(
             self.atom_graph_A, self.words_feature_A, self.dnns_atom_A)
         atom_words_feature_B = self.ww_propagate(
             self.atom_graph_B, self.words_feature_B, self.dnns_atom_B)
+        ind = torch.tensor(list(RandomSampler(self.link, True, 16))).to(self.device)
+        words_A, words_B = self.link[ind][:,0], self.link[ind][:,1]
+        dis = torch.sqrt(torch.sum(torch.square(torch.mm(atom_words_feature_A[words_A], self.map) - atom_words_feature_A[words_B]), axis=1))
 
-        
-        
+        atom_words_feature_A = self.transfer(atom_words_feature_A, atom_words_feature_B, 'A')
+        atom_words_feature_B = self.transfer(atom_words_feature_B, atom_words_feature_A, 'B')
         
         atom_users_feature_A = F.normalize(torch.matmul(self.u_w_pooling_graph_A, atom_words_feature_A))
         atom_items_feature_A = F.normalize(torch.matmul(self.i_w_pooling_graph_A, atom_words_feature_A))
@@ -193,18 +212,14 @@ class Model(BaseModel):
 
         non_atom_users_feature_B, non_atom_items_feature_B = self.ui_propagate(
             self.non_atom_graph_B, self.users_feature_B, self.items_feature_B, self.dnns_non_atom_B, 'B')
-        # non_atom_users_feature_B, non_atom_items_feature_B = self.ui_propagate(
-            # self.non_atom_graph_B, self.users_feature_B, self.items_feature_B, self.dnns_non_atom_A, 'B')
-
-        # users_feature = [atom_users_feature, non_atom_users_feature]
-        # items_feature = [atom_items_feature, non_atom_items_feature]
+            
         users_feature_A = torch.cat((atom_users_feature_A, non_atom_users_feature_A), 1)
         items_feature_A = torch.cat((atom_items_feature_A, non_atom_items_feature_A), 1)
 
         users_feature_B = torch.cat((atom_users_feature_B, non_atom_users_feature_B), 1)
         items_feature_B = torch.cat((atom_items_feature_B, non_atom_items_feature_B), 1)
 
-        return users_feature_A, items_feature_A, users_feature_B, items_feature_B
+        return users_feature_A, items_feature_A, users_feature_B, items_feature_B, dis
 
     def predict(self, users_feature, items_feature):
         norm_users_feature = torch.sqrt(
@@ -222,38 +237,17 @@ class Model(BaseModel):
         return super().regularize(users_feature, items_feature)
 
     def forward(self, u, i, domain):
-        users_feature_A, items_feature_A, users_feature_B, items_feature_B = self.propagate()
+        users_feature_A, items_feature_A, users_feature_B, items_feature_B, dis = self.propagate()
         if domain == 'A':
             users = users_feature_A
-            aug = users_feature_B
             items = items_feature_A
-            # attn = self.user_W_Attention_A_A
-            attn = self.attn_A_A
-            mapping = self.map_A
-            ali = torch.linalg.inv(self.map_A)
         elif domain == 'B':
             users = users_feature_B
-            aug = users_feature_A
             items = items_feature_B
-            # attn = self.user_W_Attention_B_B
-            attn = self.attn_B_B
-            mapping = torch.linalg.inv(self.map_A)
-            ali = self.map_A
         else:
             raise ValueError(r"non-exist domain")
-        u = u.reshape(-1, 1)
-        pro = torch.mm(users, mapping)
-        dis = torch.sqrt(torch.sum(torch.square(pro[u] - aug), axis=2))
-        match = torch.argmin(dis, dim=1)
-        u = u.reshape(-1)
-        users = torch.add(
-            users[u] * attn,
-            # torch.mm(aug[match], ali) * (1 - attn)
-            aug[match] * (1-attn)
-        )
+        users = users[u]
         items = items[i]
-        # users = fcu(users)
-        # items = fci(items)
         pred = self.predict(users, items)
         regularization = self.regularize(users, items)
         return pred, regularization, torch.mean(dis)

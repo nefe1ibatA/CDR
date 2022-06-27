@@ -24,16 +24,8 @@ allResults_B = []
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # device = torch.device("cpu")
 
-def main(dataName_A, dataName_B):
+def main():
     parser = argparse.ArgumentParser(description="Options")
-    parser.add_argument('-dataName_A',
-                        action='store',
-                        dest='dataName_A',
-                        default=dataName_A)
-    parser.add_argument('-dataName_B',
-                        action='store',
-                        dest='dataName_B',
-                        default=dataName_B)
     parser.add_argument('-maxEpochs',
                         action='store',
                         dest='maxEpochs',
@@ -41,7 +33,7 @@ def main(dataName_A, dataName_B):
     parser.add_argument('-lr',
                         action='store',
                         dest='lr',
-                        default=0.0005)                   
+                        default=0.0001)                   
     parser.add_argument('-lambdad',
                         action='store',
                         dest='lambdad',
@@ -49,11 +41,11 @@ def main(dataName_A, dataName_B):
     parser.add_argument('-lambdad2',
                         action='store',
                         dest='lambdad2',
-                        default=0.001)
+                        default=0.00005)
     parser.add_argument('-batchSize',
                         action='store',
                         dest='batchSize',
-                        default=256)
+                        default=32)
     parser.add_argument('-negNum',
                         action='store',
                         dest='negNum',
@@ -75,8 +67,6 @@ def main(dataName_A, dataName_B):
 
 class trainer:
     def __init__(self, args):
-        self.dataName_A = args.dataName_A
-        self.dataName_B = args.dataName_B
         self.maxEpochs = args.maxEpochs
         self.lr = args.lr
         self.batchSize = args.batchSize
@@ -90,6 +80,12 @@ class trainer:
             self.size_A = [int(s) for s in f.readline().split('\t')][:3]
         with open('./data/clean/dataset_size_B.txt', 'r') as f:
             self.size_B = [int(s) for s in f.readline().split('\t')][:3]
+        self.link = []
+        with open('./data/clean/common_words.txt', 'r') as f:
+            for line in f.readlines():
+                s = line.split('\t')
+                self.link.append((int(s[0]), int(s[1])))
+        self.link = torch.tensor(self.link)
 
         # A
         self.dataset_A = Dataset('ui_graph_A', self.size_A)
@@ -289,8 +285,7 @@ class trainer:
                 best_NDCG_B = NDCG_B
 
             with torch.no_grad():
-                userA, _, userB, _ = model.propagate()
-                userB = torch.mm(userB, torch.linalg.inv(model.map_A))
+                userA, _, userB, _, _ = model.propagate()
                 userA = [i.detach().cpu().numpy().reshape(-1) for i in userA]
                 userB = [i.detach().cpu().numpy().reshape(-1) for i in userB]
 
@@ -323,6 +318,4 @@ class trainer:
 
 
 if __name__ == '__main__':
-    main('Appliances', 'Movies_and_TV')
-    # main('Movies_and_TV', 'Appliances')
-    # main('Arts_Crafts_and_Sewing_5', 'Luxury_Beauty_5')
+    main()

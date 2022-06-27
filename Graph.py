@@ -72,11 +72,11 @@ def calCommon(A_user_review_dict, A_item_user_dict, B_user_review_dict, B_item_u
         if A_w in B_w2i:
             commonList.append(CommonWords(A_w, A_i, B_w2i[A_w]))
     with open('./data/clean/common_words.txt', 'w+') as t:
-        t.write()
+        for w in commonList:
+            t.write(f'{w.Aidx}\t{w.Bidx}\n')
     return commonList
 
 
 
 if __name__ == '__main__':
-    main('Appliances', 'Movies_and_TV')
-    t = calCommon('Appliances', 'Movies_and_TV')
+    main('Movies_and_TV', 'Arts_Crafts_and_Sewing_5')

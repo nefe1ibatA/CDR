@@ -60,10 +60,10 @@ class Datareader:
             if len(A_user_dict[user]) < 5:
                 A_user_dict.pop(user)
 
-        # temp_keys = list(B_user_dict.keys())
-        # for user in tqdm(temp_keys):
-        #     if len(B_user_dict[user]) < 5:
-        #         B_user_dict.pop(user)
+        temp_keys = list(B_user_dict.keys())
+        for user in tqdm(temp_keys):
+            if len(B_user_dict[user]) < 5:
+                B_user_dict.pop(user)
 
         # filter uncommon users
         temp_keys = list(A_user_dict.keys())
