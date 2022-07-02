@@ -167,16 +167,14 @@ class Model(BaseModel):
 
     def transfer(self, feature, aug, domain):
         if domain == 'A':
-            ind = self.ind_A
             mapping = self.map
             attn = self.attn_A_A
         elif domain == 'B':
-            ind = self.ind_B
             mapping = torch.linalg.inv(self.map)
             attn = self.attn_B_B
         else:
             raise ValueError(r"non-exist domain")
-        ind = torch.tensor(list(RandomSampler(ind, True, 64))).to(self.device)
+        ind = torch.tensor(list(RandomSampler(feature, True, 2))).to(self.device)
         ind = ind.reshape(-1, 1)
         pro = torch.mm(feature, mapping)
         dis = torch.sqrt(torch.sum(torch.square(pro[ind] - aug), axis=2))
@@ -194,9 +192,13 @@ class Model(BaseModel):
             self.atom_graph_A, self.words_feature_A, self.dnns_atom_A)
         atom_words_feature_B = self.ww_propagate(
             self.atom_graph_B, self.words_feature_B, self.dnns_atom_B)
-        ind = torch.tensor(list(RandomSampler(self.link, True, 16))).to(self.device)
+        ind = torch.tensor(list(RandomSampler(self.link, True, 1))).to(self.device)
         words_A, words_B = self.link[ind][:,0], self.link[ind][:,1]
-        dis = torch.sqrt(torch.sum(torch.square(torch.mm(atom_words_feature_A[words_A], self.map) - atom_words_feature_A[words_B]), axis=1))
+        dis = torch.mm(atom_words_feature_A[words_A], self.map)
+        dis = dis - atom_words_feature_B[words_B]
+        dis = torch.square(dis)
+        dis = torch.sum(dis, axis=1)
+        dis = torch.sqrt(dis)
 
         atom_words_feature_A = self.transfer(atom_words_feature_A, atom_words_feature_B, 'A')
         atom_words_feature_B = self.transfer(atom_words_feature_B, atom_words_feature_A, 'B')

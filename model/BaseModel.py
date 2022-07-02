@@ -13,8 +13,6 @@ class BaseModel(nn.Module):
         self.num_users_B = data_size_B[0]
         self.num_items_B = data_size_B[1]
         self.num_words_B = data_size_B[2]
-        self.ind_A = torch.tensor([i for i in range(self.num_words_A)])
-        self.ind_B = torch.tensor([i for i in range(self.num_words_B)])
         if create_embeddings:
             # initialize features_A
             self.users_feature_A = nn.Parameter(

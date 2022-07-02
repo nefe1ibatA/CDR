@@ -79,4 +79,4 @@ def calCommon(A_user_review_dict, A_item_user_dict, B_user_review_dict, B_item_u
 
 
 if __name__ == '__main__':
-    main('Movies_and_TV', 'Arts_Crafts_and_Sewing_5')
+    main('Digital_Music_5', 'Arts_Crafts_and_Sewing_5')

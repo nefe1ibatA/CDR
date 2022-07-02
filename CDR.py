@@ -45,7 +45,7 @@ def main():
     parser.add_argument('-batchSize',
                         action='store',
                         dest='batchSize',
-                        default=32)
+                        default=512)
     parser.add_argument('-negNum',
                         action='store',
                         dest='negNum',
@@ -53,7 +53,7 @@ def main():
     parser.add_argument('-emb_dim',
                         action='store',
                         dest='emb_dim',
-                        default=200)
+                        default=64)
     parser.add_argument('-topK',
                         action='store',
                         dest='topK',
