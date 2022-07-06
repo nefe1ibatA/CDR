@@ -174,7 +174,7 @@ class Model(BaseModel):
             attn = self.attn_B_B
         else:
             raise ValueError(r"non-exist domain")
-        ind = torch.tensor(list(RandomSampler(feature, True, 2))).to(self.device)
+        ind = torch.tensor(list(RandomSampler(feature, True, 64))).to(self.device)
         ind = ind.reshape(-1, 1)
         pro = torch.mm(feature, mapping)
         dis = torch.sqrt(torch.sum(torch.square(pro[ind] - aug), axis=2))
@@ -192,7 +192,7 @@ class Model(BaseModel):
             self.atom_graph_A, self.words_feature_A, self.dnns_atom_A)
         atom_words_feature_B = self.ww_propagate(
             self.atom_graph_B, self.words_feature_B, self.dnns_atom_B)
-        ind = torch.tensor(list(RandomSampler(self.link, True, 1))).to(self.device)
+        ind = torch.tensor(list(RandomSampler(self.link, True, 64))).to(self.device)
         words_A, words_B = self.link[ind][:,0], self.link[ind][:,1]
         dis = torch.mm(atom_words_feature_A[words_A], self.map)
         dis = dis - atom_words_feature_B[words_B]
