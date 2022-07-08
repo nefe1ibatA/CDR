@@ -29,7 +29,7 @@ def main():
     parser.add_argument('-maxEpochs',
                         action='store',
                         dest='maxEpochs',
-                        default=30)
+                        default=10)
     parser.add_argument('-lr',
                         action='store',
                         dest='lr',
@@ -42,6 +42,10 @@ def main():
                         action='store',
                         dest='lambdad2',
                         default=0.00005)
+    parser.add_argument('-lambdad3',
+                        action='store',
+                        dest='lambdad3',
+                        default=0.00005)
     parser.add_argument('-batchSize',
                         action='store',
                         dest='batchSize',
@@ -53,7 +57,7 @@ def main():
     parser.add_argument('-emb_dim',
                         action='store',
                         dest='emb_dim',
-                        default=64)
+                        default=8)
     parser.add_argument('-topK',
                         action='store',
                         dest='topK',
@@ -72,6 +76,7 @@ class trainer:
         self.batchSize = args.batchSize
         self.lambdad = args.lambdad
         self.lambdad2 = args.lambdad2
+        self.lambdad3 = args.lambdad3
         self.negNum = args.negNum
         self.emb_dim = args.emb_dim
         self.topK = args.topK
@@ -86,6 +91,13 @@ class trainer:
                 s = line.split('\t')
                 self.link.append((int(s[0]), int(s[1])))
         self.link = torch.tensor(self.link)
+
+        self.link_u = []
+        with open('./data/clean/common_users.txt', 'r') as f:
+            for line in f.readlines():
+                s = line.split('\t')
+                self.link_u.append((int(s[0]), int(s[1])))
+        self.link_u = torch.tensor(self.link_u)
 
         # A
         self.dataset_A = Dataset('ui_graph_A', self.size_A)
@@ -128,7 +140,8 @@ class trainer:
         print('testUser : ', len(testUser))
         for i in tqdm(range(len(testUser))):
             target = testItem[i][0]
-            pred, _, _ = model(testUser[i], testItem[i], domain)
+            # pred, _, _ = model(testUser[i], testItem[i], domain)
+            pred, _, _, _ = model(testUser[i], testItem[i], domain)
 
             item_score_dict = {}
 
@@ -161,7 +174,16 @@ class trainer:
         return HR, NDCG
 
     def run(self):
-        model = Model(self.emb_dim, self.size, self.link, self.raw_graph, 2, device)
+        pretrainA = torch.load('pretrain/A')
+        pretrainB = torch.load('pretrain/B')
+        pretrain = {}
+        pretrain['users_feature_A'] = pretrainA['users_feature_A']
+        pretrain['items_feature_A'] = pretrainA['items_feature_A']
+        pretrain['words_feature_A'] = pretrainA['words_feature_A']
+        pretrain['users_feature_B'] = pretrainB['users_feature_B']
+        pretrain['items_feature_B'] = pretrainB['items_feature_B']
+        pretrain['words_feature_B'] = pretrainB['words_feature_B']
+        model = Model(self.emb_dim, self.size, self.link, self.link_u, self.raw_graph, 2, device, pretrain)
         model = model.to(device)
         writer = SummaryWriter('runs/latest')
         print('training on device:', device)
@@ -199,12 +221,16 @@ class trainer:
                     train_i_A_batch = torch.tensor(train_i_A[min_idx:max_idx]).to(device)
                     train_r_A_batch = torch.tensor(train_r_A[min_idx:max_idx]).to(device)
 
-                    pred, regularizer, dis = model(train_u_A_batch, train_i_A_batch, 'A')
+                    # pred, regularizer, dis_t = model(train_u_A_batch, train_i_A_batch, 'A')
+                    pred, regularizer, dis_t, dis_u = model(train_u_A_batch, train_i_A_batch, 'A')
 
                     regRate = train_r_A_batch / 5.0
+                    # batchloss_A = torch.sum(-(regRate * torch.log(
+                        # pred) + (1 - regRate) * torch.log(
+                        # 1 - pred))) + self.lambdad * regularizer + self.lambdad2 * dis_t
                     batchloss_A = torch.sum(-(regRate * torch.log(
                         pred) + (1 - regRate) * torch.log(
-                        1 - pred))) + self.lambdad * regularizer + self.lambdad2 * dis
+                        1 - pred))) + self.lambdad * regularizer + self.lambdad2 * dis_t + self.lambdad3 * dis_u
 
                     optimizer.zero_grad()
                     batchloss_A.backward()
@@ -233,19 +259,23 @@ class trainer:
                     train_i_B_batch = torch.tensor(train_i_B[min_idx:max_idx]).to(device)
                     train_r_B_batch = torch.tensor(train_r_B[min_idx:max_idx]).to(device)
 
-                    pred, regularizer, dis = model(train_u_B_batch, train_i_B_batch, 'B')
+                    # pred, regularizer, dis_t = model(train_u_B_batch, train_i_B_batch, 'B')
+                    pred, regularizer, dis_t, dis_u = model(train_u_B_batch, train_i_B_batch, 'B')
 
                     regRate = train_r_B_batch / 5.0
+                    # batchloss_B = torch.sum(-(regRate * torch.log(
+                        # pred) + (1 - regRate) * torch.log(
+                        # 1 - pred))) + self.lambdad * regularizer + self.lambdad2 * dis_t
                     batchloss_B = torch.sum(-(regRate * torch.log(
                         pred) + (1 - regRate) * torch.log(
-                        1 - pred))) + self.lambdad * regularizer + self.lambdad2 * dis
+                        1 - pred))) + self.lambdad * regularizer + self.lambdad2 * dis_t + self.lambdad3 * dis_u
 
                     optimizer.zero_grad()
                     batchloss_B.backward()
                     optimizer.step()
                     loss_B = torch.cat((loss_B, torch.tensor([batchloss_B]).to(device)))
             loss_B = torch.mean(loss_B)
-            print("Mean loss A in epoch {} is: {}\n".format(epoch + 1, loss_B))
+            print("Mean loss B in epoch {} is: {}\n".format(epoch + 1, loss_B))
             writer.add_scalar('loss/loss_B', loss_B, global_step=epoch)
 
             model.eval()
@@ -285,7 +315,8 @@ class trainer:
                 best_NDCG_B = NDCG_B
 
             with torch.no_grad():
-                userA, _, userB, _, _ = model.propagate()
+                # userA, _, userB, _, _ = model.propagate()
+                userA, _, userB, _, _, _ = model.propagate()
                 userA = [i.detach().cpu().numpy().reshape(-1) for i in userA]
                 userB = [i.detach().cpu().numpy().reshape(-1) for i in userB]
 

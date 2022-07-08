@@ -1,3 +1,4 @@
+from re import T
 import torch
 import torch.nn as nn
 import scipy.sparse as sp
@@ -32,10 +33,14 @@ def to_tensor(graph):
 
 
 class Model(BaseModel):
-    def __init__(self, embedding_size, data_size, link, raw_graph, num_layers, device, pretrain=None):
-        super().__init__(embedding_size, data_size, create_embeddings=True)
+    def __init__(self, embedding_size, data_size, link, link_u, raw_graph, num_layers, device, pretrain=None):
+        super().__init__(embedding_size, data_size, create_embeddings=False)
 
         self.link = link
+        self.part = 0.15
+        part = int(self.part * self.num_users_A)
+        self.link_u = link_u[0:part]
+
         self.device = device
         raw_graph_A, raw_graph_B = raw_graph
         assert isinstance(raw_graph_A, list)
@@ -57,27 +62,56 @@ class Model(BaseModel):
             self.embedding_size*(l+1), self.embedding_size) for l in range(self.num_layers)])
 
         # pretrain
+        # if pretrain is not None:
+        #     self.users_feature_A.data = F.normalize(pretrain['users_feature_A'])
+        #     self.items_feature_A.data = F.normalize(pretrain['items_feature_A'])
+        #     self.words_feature_A.data = F.normalize(pretrain['words_feature_A'])
+        #     self.users_feature_B.data = F.normalize(pretrain['users_feature_B'])
+        #     self.items_feature_B.data = F.normalize(pretrain['items_feature_B'])
+        #     self.words_feature_B.data = F.normalize(pretrain['words_feature_B'])
+
         if pretrain is not None:
-            self.users_feature_A.data = F.normalize(pretrain['users_feature_A'])
-            self.items_feature_A.data = F.normalize(pretrain['items_feature_A'])
-            self.words_feature_A.data = F.normalize(pretrain['words_feature_A'])
-            self.users_feature_B.data = F.normalize(pretrain['users_feature_B'])
-            self.items_feature_B.data = F.normalize(pretrain['items_feature_B'])
-            self.words_feature_B.data = F.normalize(pretrain['words_feature_B'])
+            self.users_feature_A = pretrain['users_feature_A']
+            self.items_feature_A = pretrain['items_feature_A']
+            self.words_feature_A = pretrain['words_feature_A']
+            self.users_feature_B = pretrain['users_feature_B']
+            self.items_feature_B = pretrain['items_feature_B']
+            self.words_feature_B = pretrain['words_feature_B']
 
         t = int((num_layers + 1) * (num_layers + 2) / 2)
-        self.map = nn.Parameter(
-            torch.randn(embedding_size * t, embedding_size * t),
-            requires_grad=True
+        self.map_A = nn.Linear(embedding_size * t, embedding_size * t)
+
+        self.map_B = nn.Linear(embedding_size * t, embedding_size * t)
+
+        # self.map_uA = nn.Linear(embedding_size * t * 2, embedding_size * t * 2)
+        self.map_uA = nn.Sequential(
+            nn.Linear(embedding_size * t, embedding_size * t),
+            nn.Linear(embedding_size * t, embedding_size * t)
+        )
+
+        # self.map_uB = nn.Linear(embedding_size * t * 2, embedding_size * t * 2)
+        self.map_uB = nn.Sequential(
+            nn.Linear(embedding_size * t, embedding_size * t),
+            nn.Linear(embedding_size * t, embedding_size * t)
         )
 
         self.attn_A_A = nn.Parameter(
-            torch.randn(embedding_size * t),
+            torch.randn(self.num_words_A, embedding_size * t),
             requires_grad=True
         )
 
         self.attn_B_B = nn.Parameter(
-            torch.randn(embedding_size * t),
+            torch.randn(self.num_words_B, embedding_size * t),
+            requires_grad=True
+        )
+
+        self.attn_A_A_u = nn.Parameter(
+            torch.randn(self.num_users_A, embedding_size * t),
+            requires_grad=True
+        )
+
+        self.attn_B_B_u = nn.Parameter(
+            torch.randn(self.num_users_B, embedding_size * t),
             requires_grad=True
         )
 
@@ -165,26 +199,61 @@ class Model(BaseModel):
             all_features, (num_users, num_items), 0)
         return users_feature, items_feature
 
-    def transfer(self, feature, aug, domain):
-        if domain == 'A':
-            mapping = self.map
-            attn = self.attn_A_A
-        elif domain == 'B':
-            mapping = torch.linalg.inv(self.map)
-            attn = self.attn_B_B
-        else:
-            raise ValueError(r"non-exist domain")
-        ind = torch.tensor(list(RandomSampler(feature, True, 64))).to(self.device)
+    def transfer(self, feature, aug, map, attn, domain):
+        # CUDA out of Memory -> RandomSampler
+        ind = torch.tensor(list(RandomSampler(feature, True, 1024))).to(self.device)
+        # ind = torch.tensor([i for i in range(feature.shape[0])]).to(self.device)
         ind = ind.reshape(-1, 1)
-        pro = torch.mm(feature, mapping)
+        pro = map(feature)
         dis = torch.sqrt(torch.sum(torch.square(pro[ind] - aug), axis=2))
-        match = torch.argmin(dis, dim=1)
+        match = torch.min(dis, dim=1)
         ind = ind.reshape(-1)
+        # ind = ind[match.values < threshold]
+        # match = match.indices[match.values < threshold]
+        match = match.indices
         feature[ind] = torch.add(
-            feature[ind] * attn,
-            aug[match] * (1-attn)
+            feature[ind] * attn[ind],
+            aug[match] * (1-attn[ind])
+        )
+        # r = 0
+        # t = self.link_u.tolist()
+        # if domain == 'A' and ind.shape[0] != 0:
+        #     for i, (j,k) in enumerate(zip(ind, match)):
+        #         if [j,k] in t:
+        #             r += 1
+        #     print(r / ind.shape[0])
+                
+        if domain == 'A':
+            ind, match = self.link_u[:,0], self.link_u[:,1]
+        elif domain == 'B':
+            ind, match = self.link_u[:,1], self.link_u[:,0]
+        else:
+            raise ValueError(r"Non-exist Domain!")
+        feature[ind] = torch.add(
+            feature[ind] * attn[ind],
+            aug[match] * (1-attn[ind])
         )
         return feature
+
+    def alignLoss(self, source, target, map, domain):
+        # CUDA out of Memory -> RandomSampler
+        # ind = torch.tensor(list(RandomSampler(link, True, 64))).to(self.device)
+        # ind_S, ind_T = link[ind][:,0], link[ind][:,1]
+        if domain == 'A':
+            ind_S, ind_T = self.link_u[:,0], self.link_u[:,1]
+        elif domain == 'B':
+            ind_S, ind_T = self.link_u[:,1], self.link_u[:,0]
+        else:
+            raise ValueError(r"Non-exist Domain!")
+        dis = map(source[ind_S])
+        dis = dis - target[ind_T]
+        dis = torch.square(dis)
+        dis = torch.sum(dis, axis=1)
+        dis = torch.sqrt(dis)
+        # threshold = torch.mean(dis)
+        return dis
+        # return dis, threshold
+
 
     def propagate(self):
         #  ==============================  word level propagation  ==============================
@@ -192,16 +261,14 @@ class Model(BaseModel):
             self.atom_graph_A, self.words_feature_A, self.dnns_atom_A)
         atom_words_feature_B = self.ww_propagate(
             self.atom_graph_B, self.words_feature_B, self.dnns_atom_B)
-        ind = torch.tensor(list(RandomSampler(self.link, True, 64))).to(self.device)
-        words_A, words_B = self.link[ind][:,0], self.link[ind][:,1]
-        dis = torch.mm(atom_words_feature_A[words_A], self.map)
-        dis = dis - atom_words_feature_B[words_B]
-        dis = torch.square(dis)
-        dis = torch.sum(dis, axis=1)
-        dis = torch.sqrt(dis)
+        
+        # ALIGN TOKEN
+        dis_A = self.alignLoss(atom_words_feature_A, atom_words_feature_B, self.map_A, 'A')
+        dis_B = self.alignLoss(atom_words_feature_B, atom_words_feature_A, self.map_B, 'B')
+        dis_t = dis_A + dis_B
 
-        atom_words_feature_A = self.transfer(atom_words_feature_A, atom_words_feature_B, 'A')
-        atom_words_feature_B = self.transfer(atom_words_feature_B, atom_words_feature_A, 'B')
+        atom_words_feature_A = self.transfer(atom_words_feature_A, atom_words_feature_B, self.map_A, self.attn_A_A, 'A')
+        atom_words_feature_B = self.transfer(atom_words_feature_B, atom_words_feature_A, self.map_B, self.attn_B_B, 'B')
         
         atom_users_feature_A = F.normalize(torch.matmul(self.u_w_pooling_graph_A, atom_words_feature_A))
         atom_items_feature_A = F.normalize(torch.matmul(self.i_w_pooling_graph_A, atom_words_feature_A))
@@ -214,6 +281,16 @@ class Model(BaseModel):
 
         non_atom_users_feature_B, non_atom_items_feature_B = self.ui_propagate(
             self.non_atom_graph_B, self.users_feature_B, self.items_feature_B, self.dnns_non_atom_B, 'B')
+
+        dis_A = self.alignLoss(non_atom_users_feature_A, non_atom_users_feature_B, self.map_uA, 'A')
+        dis_B = self.alignLoss(non_atom_users_feature_B, non_atom_users_feature_A, self.map_uB, 'B')
+        dis_u = dis_A + dis_B
+
+        non_atom_users_feature_A = self.map_A(non_atom_users_feature_A)
+        non_atom_users_feature_B = self.map_B(non_atom_users_feature_B)
+
+        non_atom_users_feature_A = self.transfer(non_atom_users_feature_A, non_atom_users_feature_B, self.map_uA, self.attn_A_A_u, 'A')
+        non_atom_users_feature_B = self.transfer(non_atom_users_feature_B, non_atom_users_feature_A, self.map_uB, self.attn_B_B_u, 'B')
             
         users_feature_A = torch.cat((atom_users_feature_A, non_atom_users_feature_A), 1)
         items_feature_A = torch.cat((atom_items_feature_A, non_atom_items_feature_A), 1)
@@ -221,7 +298,15 @@ class Model(BaseModel):
         users_feature_B = torch.cat((atom_users_feature_B, non_atom_users_feature_B), 1)
         items_feature_B = torch.cat((atom_items_feature_B, non_atom_items_feature_B), 1)
 
-        return users_feature_A, items_feature_A, users_feature_B, items_feature_B, dis
+        # dis_A, threshold_A = self.alignLoss(users_feature_A, users_feature_B, self.map_uA, 'A')
+        # dis_B, threshold_B = self.alignLoss(users_feature_B, users_feature_A, self.map_uB, 'B')
+        # dis_t = dis_A + dis_B
+
+        # users_feature_A = self.transfer(users_feature_A, users_feature_B, self.map_uA, self.attn_A_A_u, threshold_A, 'A')
+        # users_feature_B = self.transfer(users_feature_B, users_feature_A, self.map_uB, self.attn_B_B_u, threshold_B, 'B')
+
+        # return users_feature_A, items_feature_A, users_feature_B, items_feature_B, dis_t
+        return users_feature_A, items_feature_A, users_feature_B, items_feature_B, dis_t, dis_u
 
     def predict(self, users_feature, items_feature):
         norm_users_feature = torch.sqrt(
@@ -239,7 +324,8 @@ class Model(BaseModel):
         return super().regularize(users_feature, items_feature)
 
     def forward(self, u, i, domain):
-        users_feature_A, items_feature_A, users_feature_B, items_feature_B, dis = self.propagate()
+        # users_feature_A, items_feature_A, users_feature_B, items_feature_B, dis_t = self.propagate()
+        users_feature_A, items_feature_A, users_feature_B, items_feature_B, dis_t, dis_u = self.propagate()
         if domain == 'A':
             users = users_feature_A
             items = items_feature_A
@@ -252,6 +338,7 @@ class Model(BaseModel):
         items = items[i]
         pred = self.predict(users, items)
         regularization = self.regularize(users, items)
-        return pred, regularization, torch.mean(dis)
+        # return pred, regularization, torch.mean(dis_t)
+        return pred, regularization, torch.mean(dis_t), torch.mean(dis_u)
 
         

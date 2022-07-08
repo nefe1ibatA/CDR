@@ -35,7 +35,7 @@ def graphGen(user_rating_dict, user_review_dict, item_user_dict, domain):
             iw_graph.append((u - num_users, v - num_docs, wt))
         else:
             ww_graph.append((u - num_docs, v - num_docs, wt))
-    RatingGraph, _ = dataset.getData(user_rating_dict, user_review_dict, item_user_dict)
+    RatingGraph = dataset.data
     for (u, v, wt) in RatingGraph:
         ui_graph.append((u, v - num_users, wt))
     g2f(ui_graph, 'ui_graph_' + domain)
@@ -51,29 +51,47 @@ def main(dataName_A, dataName_B):
 
     graphGen(A_user_rating_dict, A_user_review_dict, A_item_user_dict, 'A')
     graphGen(B_user_rating_dict, B_user_review_dict, B_item_user_dict, 'B')
-    calCommon(A_user_review_dict, A_item_user_dict, B_user_review_dict, B_item_user_dict)
+    calCommon(A_user_rating_dict, A_user_review_dict, A_item_user_dict, B_user_rating_dict, B_user_review_dict, B_item_user_dict)
 
 
-class CommonWords:
+class CommonObj:
     def __init__(self, w: str, A: int, B: int) -> None:
         self.word: str = w
         self.Aidx: int = A
         self.Bidx: int = B
 
-def calCommon(A_user_review_dict, A_item_user_dict, B_user_review_dict, B_item_user_dict):
+def calCommon(A_user_rating_dict, A_user_review_dict, A_item_user_dict, B_user_rating_dict, B_user_review_dict, B_item_user_dict):
 
+    # Words
     A_ReviewGraph = ReviewGraphBuilder(A_user_review_dict, A_item_user_dict)
     A_w2i: dict = A_ReviewGraph.getWordsidx()
 
     B_ReviewGraph = ReviewGraphBuilder(B_user_review_dict, B_item_user_dict)
     B_w2i: dict = B_ReviewGraph.getWordsidx()
-    commonList: List[CommonWords] = []
+    commonList: List[CommonObj] = []
     for A_w, A_i in A_w2i.items():
         if A_w in B_w2i:
-            commonList.append(CommonWords(A_w, A_i, B_w2i[A_w]))
+            commonList.append(CommonObj(A_w, A_i, B_w2i[A_w]))
     with open('./data/clean/common_words.txt', 'w+') as t:
         for w in commonList:
             t.write(f'{w.Aidx}\t{w.Bidx}\n')
+    
+    # User
+    A_dataset = RatingGraphBuilder(
+        A_user_rating_dict, A_user_review_dict, A_item_user_dict)
+    A_uDict: dict = A_dataset.getNodeDict()
+    B_dataset = RatingGraphBuilder(
+        B_user_rating_dict, B_user_review_dict, B_item_user_dict)
+    B_uDict: dict = B_dataset.getNodeDict()
+    commonList: List[CommonObj] = []
+
+    for A_w, A_i in A_uDict.items():
+        if A_w in B_uDict:
+            commonList.append(CommonObj(A_w, A_i, B_uDict[A_w]))
+    with open('./data/clean/common_users.txt', 'w+') as t:
+        for w in commonList:
+            t.write(f'{w.Aidx}\t{w.Bidx}\n')
+    
     return commonList
 
 

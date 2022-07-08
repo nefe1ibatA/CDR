@@ -4,6 +4,7 @@ from utils import print_graph_detail
 class RatingGraphBuilder(object):
 	def __init__(self, user_rating_dict, user_review_dict, item_user_dict):
 		self.graph = nx.Graph()
+		self.nodedict = {}
 		self.data, self.adj = self.getData(
 			user_rating_dict, user_review_dict, item_user_dict)
 
@@ -18,22 +19,15 @@ class RatingGraphBuilder(object):
 
 		for index, node in enumerate(nodeset):
 			nodedict[node] = index
+		self.nodedict = nodedict
 
 		u = 0
 		for user, reviews in user_review_dict.items():
 			u += 1
-			str = ""
-			for each in reviews:
-				str += " "
-				str += each[1]
 
 		i = 0
 		for item, reviews in item_user_dict.items():
 			i += 1
-			str = ""
-			for each in reviews:
-				str += " "
-				str += each[1]
 
 		self.shape = [u, i]
 		print("user: {} item: {}".format(u, i))
@@ -60,4 +54,7 @@ class RatingGraphBuilder(object):
 		print_graph_detail(self.graph)
 
 		return data, self.graph
+
+	def getNodeDict(self):
+		return self.nodedict
 

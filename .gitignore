@@ -6,3 +6,4 @@ baseline_result.mat
 runs
 *.png
 *.mat
+tsne/
